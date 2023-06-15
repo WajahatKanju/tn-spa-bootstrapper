@@ -3,23 +3,11 @@ from django.contrib.auth import authenticate
 from django.test import Client
 from pytest_factoryboy import register
 
-from .factories import UserFactory
-from .models import User
-from .serializers import UserLoginSerializer
-
-JSON_RQST_HEADERS = dict(
-    content_type="application/json",
-    HTTP_ACCEPT="application/json",
-)
+from ..factories import UserFactory
+from ..models import User, UserResetPasswordCode
+from ..serializers import UserLoginSerializer
 
 register(UserFactory)
-
-
-@pytest.fixture
-def test_user():
-    user = UserFactory()
-    user.save()
-    return user
 
 
 @pytest.mark.django_db
@@ -59,7 +47,7 @@ def test_create_user_from_factory(test_user):
 
 
 @pytest.mark.django_db
-def test_user_can_login(test_user):
+def test_user_can_login(test_user, JSON_RQST_HEADERS):
     test_user.set_password("testing123")
     test_user.save()
     client = Client()
@@ -85,3 +73,32 @@ def test_password_reset(test_user, client):
 @pytest.mark.django_db
 def test_user_token_gets_created_from_signal(test_user):
     assert test_user.auth_token
+
+
+@pytest.mark.django_db
+def test_user_password_reset_request(test_user, JSON_RQST_HEADERS):
+    client = Client()
+    res = client.get(f"/api/password/reset/code/{test_user.email}/", **JSON_RQST_HEADERS)
+    assert res.status_code == 204
+    assert UserResetPasswordCode.objects.count()
+
+
+@pytest.mark.django_db
+def test_user_can_change_password_with_code(test_user, JSON_RQST_HEADERS):
+    client = Client()
+    res = client.post("/api/login/", {"email": test_user.email, "password": "testing123"}, **JSON_RQST_HEADERS)
+    assert res.status_code == 200
+    assert res.json()
+    res = client.get(f"/api/password/reset/code/{test_user.email}/", **JSON_RQST_HEADERS)
+    assert res.status_code == 204
+    assert UserResetPasswordCode.objects.count()
+    code = 12345
+    UserResetPasswordCode.objects.create_code(user=test_user, code=12345)
+    res = client.post(
+        f"/api/password/reset/code/confirm/{test_user.email}/", {"code": code, "password": "testing12345"}, **JSON_RQST_HEADERS
+    )
+    assert res.status_code == 200
+    assert res.json()
+    res = client.post("/api/login/", {"email": test_user.email, "password": "testing12345"}, **JSON_RQST_HEADERS)
+    assert res.status_code == 200
+    assert res.json()
